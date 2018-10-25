@@ -1,7 +1,7 @@
 /********************************
 Programmer	Last Modified		Description
 ---------	-------------		---------------
-Cody Sigvartson	10_23_18			Initial development
+Cody Sigvartson	10_24_18			Initial development
 
 Program description:
 This program builds and sends ip packets to both local networks
@@ -79,7 +79,6 @@ void send_message(char if_name[], struct sockaddr_ll sk_addr, char hw_addr[], ch
 	char *eth_header = (char *)&frame;
 	memcpy(buff,eth_header,ETHHDRSIZ);
 	memcpy(&buff[ETHHDRSIZ],payload,sizePayload);
-	
 
 	sk_addr.sll_ifindex = if_idx.ifr_ifindex;
 	sk_addr.sll_halen = ETH_ALEN;
@@ -127,7 +126,7 @@ struct iphdr constructIpHeader(struct in_addr dst, struct in_addr router, char i
 	ip_hdr.id = 4;
 	ip_hdr.frag_off = 0x0;
 	ip_hdr.ttl = 0x40;
-	ip_hdr.protocol = 4;
+	ip_hdr.protocol = 6;
 	ip_hdr.check = 0;
 	ip_hdr.saddr = get_ip_saddr(if_name,sockfd);
 	ip_hdr.daddr = dst.s_addr;
@@ -263,8 +262,11 @@ int main(int argc, char *argv[])
 			perror("SIOCGIFHWADDR");
 		}
 
+		// if netmask is different, send ARP request for my router IP first
+		// once I have MAC of my router, send  dst MAC router, dest IP
+
 		// send ARP request
-		struct arp_hdr arpRequest = constructArpRequest(interfaceName, sockfd, dst_ip, if_hwaddr);
+		struct arp_hdr arpRequest = constructArpRequest(interfaceName, sockfd, router_ip, if_hwaddr);
 		char payload[ARPHDRSIZ+strlen(buff)+1];
 		char *arp = (char *)&arpRequest;
 		memcpy(payload,arp,ARPHDRSIZ);
@@ -282,14 +284,14 @@ int main(int argc, char *argv[])
 			if(response[12] == 0x08 && response[13] == 0x06 && response[20] == 0x00 && response[21] == 0x02){
 				printf("ARP reply received!\n");
 				memcpy(dst_mac,&response[22],6);
-				printf("Dest MAC: [%X][%X][%X][%X][%X][%X]\n",dst_mac[0],dst_mac[1],dst_mac[2],dst_mac[3],dst_mac[4],dst_mac[5]);
+				printf("Dest MAC: [%02X][%02X][%02X][%02X][%02X][%02X]\n",dst_mac[0],dst_mac[1],dst_mac[2],dst_mac[3],dst_mac[4],dst_mac[5]);
 				arpReceived = 1;
 			}
 		}
 
 		// send IP packet
 		memset(&sk_addr,0,sk_addr_size);
-		struct iphdr ip_hdr= constructIpHeader(dst_ip, router_ip, interfaceName, sockfd, strlen(buff));
+		struct iphdr ip_hdr= constructIpHeader(dst_ip, dst_ip, interfaceName, sockfd, strlen(buff));
 		char ip_payload[IPHDRSIZ+strlen(buff)+1];
 		char *ip = (char *)&ip_hdr;
 		memcpy(ip_payload, ip, IPHDRSIZ);
@@ -301,7 +303,28 @@ int main(int argc, char *argv[])
 		if((sockfd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL)))<0){
 			perror("socket() failed!");
 		}
-		recv_message(interfaceName, sk_addr, sockfd);
+		// wait for ARP request
+		unsigned char request[BUF_SIZ];
+		char target[4];
+		int arpReceived = 0;
+		int sk_addr_size = sizeof(struct sockaddr_ll);
+		while(!arpReceived){
+			memset(&sk_addr, 0, sk_addr_size);
+			int recvLen = recvfrom(sockfd, request, BUF_SIZ, 0 , (struct sockaddr*)&sk_addr, &sk_addr_size);
+			if(request[12] == 0x08 && request[13] == 0x06 && request[20] == 0x00 && request[21] == 0x01){
+				printf("ARP request received!\n");
+				memcpy(target,&request[38],4);
+				printf("Seeing if target IP: %02X.%02X.%02X.%02X is me...\n",target[0],target[1],target[2],target[3]);
+				unsigned long myip_addr = get_ip_saddr(interfaceName, sockfd);
+				char myip[4];
+				memcpy(myip, &myip_addr, 4);
+				if(strncmp(myip,target,4)==0){
+					printf("I am who you're looking for!\n");
+					arpReceived = 1;
+				}
+				
+			}
+		}
 	}
 
 	return 0;
