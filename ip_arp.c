@@ -32,7 +32,7 @@ unsigned long get_ip_saddr(char *if_name, int sockfd);
 unsigned long get_netmask(char *if_name, int sockfd);
 uint16_t ip_checksum(void *vdata, size_t length);
 struct arp_hdr constructArpRequest(char if_name[], int sockfd, struct in_addr dst, struct ifreq if_hwaddr);
-struct iphdr constructIpHeader(struct in_addr dst, struct in_addr router, char if_name[], int sockfd, int sizePayload);
+struct iphdr constructIpHeader(struct in_addr dst, char if_name[], int sockfd, int sizePayload);
 void recv_message(char if_name[], struct sockaddr_ll sk_addr, int sockfd);
 void send_message(char if_name[], struct sockaddr_ll sk_addr, char hw_addr[], char payload[], int sockfd, int type, struct ifreq if_hwaddr, int sizePayload);
 
@@ -116,7 +116,7 @@ void recv_message(char if_name[], struct sockaddr_ll sk_addr, int sockfd){
 	printf("Source MAC: [%X][%X][%X][%X][%X][%X]\n",src_mac[0],src_mac[1],src_mac[2],src_mac[3],src_mac[4],src_mac[5]);
 }
 
-struct iphdr constructIpHeader(struct in_addr dst, struct in_addr router, char if_name[], int sockfd, int sizePayload){
+struct iphdr constructIpHeader(struct in_addr dst, char if_name[], int sockfd, int sizePayload){
 	printf("constructing IP header...\n");
 	struct iphdr ip_hdr;
 	ip_hdr.ihl = 5;
@@ -152,10 +152,10 @@ struct arp_hdr constructArpRequest(char if_name[], int sockfd, struct in_addr ds
 	memset(arphdr.ar_tha, 0, 6);
 	memcpy(arphdr.ar_tip, &dst.s_addr, 4);
 	printf("ARP request has been constructed:\n");
-//	printf("source ip: %02X.%02X.%02X.%02X\n",arphdr.ar_sip[0],arphdr.ar_sip[1],arphdr.ar_sip[2],arphdr.ar_sip[3]);
-//	printf("target ip: %02X.%02X.%02X.%02X\n",arphdr.ar_tip[0],arphdr.ar_tip[1],arphdr.ar_tip[2],arphdr.ar_tip[3]);
-//	printf("target ha: [%02X]:[%02X]:[%02X]:[%02X]:[%02X]:[%02X]\n",arphdr.ar_tha[0],arphdr.ar_tha[1],arphdr.ar_tha[2],arphdr.ar_tha[3], arphdr.ar_tha[4], arphdr.ar_tha[5]);
-//	printf("source ha: [%02X]:[%02X]:[%02X]:[%02X]:[%02X]:[%02X]\n",arphdr.ar_sha[0],arphdr.ar_sha[1],arphdr.ar_sha[2],arphdr.ar_sha[3], arphdr.ar_sha[4], arphdr.ar_sha[5]);
+	printf("source ip: %02X.%02X.%02X.%02X\n",arphdr.ar_sip[0],arphdr.ar_sip[1],arphdr.ar_sip[2],arphdr.ar_sip[3]);
+	printf("target ip: %02X.%02X.%02X.%02X\n",arphdr.ar_tip[0],arphdr.ar_tip[1],arphdr.ar_tip[2],arphdr.ar_tip[3]);
+	printf("target ha: [%02X]:[%02X]:[%02X]:[%02X]:[%02X]:[%02X]\n",arphdr.ar_tha[0],arphdr.ar_tha[1],arphdr.ar_tha[2],arphdr.ar_tha[3], arphdr.ar_tha[4], arphdr.ar_tha[5]);
+	printf("source ha: [%02X]:[%02X]:[%02X]:[%02X]:[%02X]:[%02X]\n",arphdr.ar_sha[0],arphdr.ar_sha[1],arphdr.ar_sha[2],arphdr.ar_sha[3], arphdr.ar_sha[4], arphdr.ar_sha[5]);
 	return arphdr;
 }
 
@@ -264,9 +264,15 @@ int main(int argc, char *argv[])
 
 		// if netmask is different, send ARP request for my router IP first
 		// once I have MAC of my router, send  dst MAC router, dest IP
-
-		// send ARP request
-		struct arp_hdr arpRequest = constructArpRequest(interfaceName, sockfd, router_ip, if_hwaddr);
+		unsigned long netmask = get_netmask(interfaceName,sockfd);
+		unsigned long my_ip = get_ip_saddr(interfaceName,sockfd);
+		struct arp_hdr arpRequest;
+		if((my_ip & netmask) == (dst_ip.s_addr & netmask)){
+			 arpRequest = constructArpRequest(interfaceName, sockfd, dst_ip, if_hwaddr);
+		}
+		else{
+			 arpRequest = constructArpRequest(interfaceName, sockfd, router_ip, if_hwaddr);
+		}
 		char payload[ARPHDRSIZ+strlen(buff)+1];
 		char *arp = (char *)&arpRequest;
 		memcpy(payload,arp,ARPHDRSIZ);
@@ -291,7 +297,13 @@ int main(int argc, char *argv[])
 
 		// send IP packet
 		memset(&sk_addr,0,sk_addr_size);
-		struct iphdr ip_hdr= constructIpHeader(dst_ip, dst_ip, interfaceName, sockfd, strlen(buff));
+		struct iphdr ip_hdr;
+		if((my_ip & netmask) == (dst_ip.s_addr & netmask)){
+			ip_hdr = constructIpHeader(dst_ip, interfaceName, sockfd, strlen(buff));
+		}
+		else{
+			ip_hdr = constructIpHeader(dst_ip, interfaceName, sockfd, strlen(buff));
+		}
 		char ip_payload[IPHDRSIZ+strlen(buff)+1];
 		char *ip = (char *)&ip_hdr;
 		memcpy(ip_payload, ip, IPHDRSIZ);
